@@ -1,0 +1,5 @@
+__build
+CMakeLists.txt.user*
+.git
+*.user
+build-*
