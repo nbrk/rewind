@@ -31,6 +31,7 @@ struct EventListEntry {
   void* user_event;
   RwnEventApplyFunc user_event_apply_func;
   RwnEventDestroyFunc user_event_destroy_func;
+  int phase;
   struct EventListEntry* next;
 };
 
@@ -90,8 +91,19 @@ void rwn_history_destroy(RwnHistory* h) {
   free(h);
 }
 
+static int cmp_event_list_entries_by_phase(const struct EventListEntry* lhs,
+                                           const struct EventListEntry* rhs) {
+  if (lhs->phase < rhs->phase)
+    return -1;
+  if (lhs->phase > rhs->phase)
+    return 1;
+
+  return 0;
+}
+
 RwnEventHandle* rwn_history_schedule(RwnHistory* h,
                                      int at_timepoint,
+                                     int at_phase,
                                      const void* evt,
                                      RwnEventApplyFunc evt_apply_func,
                                      RwnEventDestroyFunc evt_destroy_func) {
@@ -113,8 +125,12 @@ RwnEventHandle* rwn_history_schedule(RwnHistory* h,
   evtentry->user_event = (void*)evt;
   evtentry->user_event_apply_func = evt_apply_func;
   evtentry->user_event_destroy_func = evt_destroy_func;
+  evtentry->phase = at_phase;
   evtentry->next = NULL;
   LL_APPEND(mapentry->event_list, evtentry);
+
+  // sort event list by phase at every insertion
+  LL_SORT(mapentry->event_list, cmp_event_list_entries_by_phase);
 
   // create, save and return opaque handle describing how to locate the event
   RwnEventHandle* handle = malloc(sizeof(*handle));
@@ -194,18 +210,18 @@ void rwn_history_unschedule(RwnHistory* h, RwnEventHandle* eh) {
 }
 
 int rwn_history_state_delta(const RwnHistory* h,
-                            int from_timepoint,
-                            int to_timepoint,
+                            int start_timepoint,
+                            int finish_timepoint,
                             void* state) {
-  if (from_timepoint < 0 || to_timepoint < 0)
+  if (start_timepoint < 0 || finish_timepoint < 0)
     return 0;
 
-  if (to_timepoint < from_timepoint)
+  if (finish_timepoint < start_timepoint)
     return 0;
 
   int evtcount = 0;
   int i;
-  for (i = from_timepoint; i < to_timepoint; ++i) {
+  for (i = start_timepoint; i <= finish_timepoint; ++i) {
     struct TimepointHashMapEntry* mapentry;
     HASH_FIND_INT(h->timepoint_hash_map, &i, mapentry);
     if (mapentry != NULL) {

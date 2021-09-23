@@ -35,12 +35,13 @@ extern int rwn_history_get_events(const RwnHistory* h,
                                   int at_timepoint,
                                   void** user_eventv);
 extern int rwn_history_state_delta(const RwnHistory* h,
-                                   int from_timepoint,
-                                   int to_timepoint,
+                                   int start_timepoint,
+                                   int finish_timepoint,
                                    void* delta_state);
 extern RwnEventHandle* rwn_history_schedule(
     RwnHistory* h,
     int at_timepoint,
+    int at_phase,
     const void* evt,
     RwnEventApplyFunc evt_apply_func,
     RwnEventDestroyFunc evt_destroy_func);
