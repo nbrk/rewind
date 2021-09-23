@@ -37,7 +37,8 @@ extern int rwn_history_get_events(const RwnHistory* h,
 extern int rwn_history_state_delta(const RwnHistory* h,
                                    int start_timepoint,
                                    int finish_timepoint,
-                                   void* delta_state);
+                                   void* state,
+                                   const int max_threads);
 extern RwnEventHandle* rwn_history_schedule(
     RwnHistory* h,
     int at_timepoint,
@@ -47,5 +48,5 @@ extern RwnEventHandle* rwn_history_schedule(
     RwnEventDestroyFunc evt_destroy_func);
 extern void rwn_history_unschedule(RwnHistory* h, RwnEventHandle* eh);
 extern int rwn_history_unschedule_all(RwnHistory* h,
-                                      int from_timepoint,
-                                      int to_timepoint);
+                                      int start_timepoint,
+                                      int finish_timepoint);

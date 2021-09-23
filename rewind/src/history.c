@@ -24,6 +24,8 @@
 #include "uthash.h"
 #include "utlist.h"
 
+#include <pthread.h>
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -209,10 +211,9 @@ void rwn_history_unschedule(RwnHistory* h, RwnEventHandle* eh) {
   free(eh);
 }
 
-int rwn_history_state_delta(const RwnHistory* h,
-                            int start_timepoint,
-                            int finish_timepoint,
-                            void* state) {
+int rwn_history_unschedule_all(RwnHistory* h,
+                               int start_timepoint,
+                               int finish_timepoint) {
   if (start_timepoint < 0 || finish_timepoint < 0)
     return 0;
 
@@ -220,40 +221,11 @@ int rwn_history_state_delta(const RwnHistory* h,
     return 0;
 
   int evtcount = 0;
-  int i;
-  for (i = start_timepoint; i <= finish_timepoint; ++i) {
-    struct TimepointHashMapEntry* mapentry;
-    HASH_FIND_INT(h->timepoint_hash_map, &i, mapentry);
-    if (mapentry != NULL) {
-      struct EventListEntry* evtentry;
-      LL_FOREACH(mapentry->event_list, evtentry) {
-        if (state != NULL && evtentry->user_event != NULL &&
-            evtentry->user_event_apply_func != NULL) {
-          evtentry->user_event_apply_func(evtentry->user_event, state);
-          evtcount += 1;
-        }
-      }
-    }
-  }
-
-  return evtcount;
-}
-
-int rwn_history_unschedule_all(RwnHistory* h,
-                               int from_timepoint,
-                               int to_timepoint) {
-  if (from_timepoint < 0 || to_timepoint < 0)
-    return 0;
-
-  if (to_timepoint < from_timepoint)
-    return 0;
-
-  int evtcount = 0;
 
   // Iterate over issued event handles to find and unsched such events
   RwnEventHandle *eh, *eh_tmp;
   LL_FOREACH_SAFE(h->event_handle_list, eh, eh_tmp) {
-    if (eh->timepoint >= from_timepoint && eh->timepoint < to_timepoint) {
+    if (eh->timepoint >= start_timepoint && eh->timepoint <= finish_timepoint) {
       rwn_history_unschedule(h, eh);
       evtcount += 1;
     }
@@ -277,6 +249,115 @@ int rwn_history_get_events(const RwnHistory* h,
     LL_FOREACH(mapentry->event_list, evtentry) {
       user_eventv[evtcount] = evtentry->user_event;
       evtcount += 1;
+    }
+  }
+
+  return evtcount;
+}
+
+struct ThreadListElem {
+  pthread_t thread;
+  void* user_event;
+  RwnEventApplyFunc user_event_apply_func;
+  void* state;
+
+  struct ThreadListElem* next;
+};
+
+static void* thread_apply_event(void* arg) {
+  struct ThreadListElem* self_data = arg;
+  self_data->user_event_apply_func(self_data->user_event, self_data->state);
+  return NULL;
+}
+
+int rwn_history_state_delta(const RwnHistory* h,
+                            int start_timepoint,
+                            int finish_timepoint,
+                            void* state,
+                            const int max_threads) {
+  if (start_timepoint < 0 || finish_timepoint < 0)
+    return 0;
+
+  if (finish_timepoint < start_timepoint)
+    return 0;
+
+  int evtcount = 0;
+  int i;
+  for (i = start_timepoint; i <= finish_timepoint; ++i) {
+    struct TimepointHashMapEntry* mapentry;
+    HASH_FIND_INT(h->timepoint_hash_map, &i, mapentry);
+    if (mapentry != NULL && mapentry->event_list != NULL) {
+      /*
+       * Multithreaded execution of phases
+       */
+      if (max_threads > 0) {
+        struct ThreadListElem* thread_list = NULL;
+        struct ThreadListElem *thread_list_elem, *thread_list_elem_tmp;
+        int thread_list_length = 0;
+
+        struct EventListEntry* evtentry = mapentry->event_list;  // first entry
+        int prev_phase = evtentry->phase;
+        int current_phase;
+        LL_FOREACH(mapentry->event_list, evtentry) {
+          if (evtentry->user_event != NULL &&
+              evtentry->user_event_apply_func != NULL) {
+            current_phase = evtentry->phase;
+            /*
+             * If current phase is different from the previous one or we hit a
+             * limit on threads, then wait for all threads before continue.
+             *
+             */
+            LL_COUNT(thread_list, thread_list_elem, thread_list_length);
+            if (thread_list_length >= max_threads ||
+                current_phase != prev_phase) {
+              /*
+               * Wait (join) and then remove finished threads from the list
+               */
+              LL_FOREACH_SAFE(thread_list, thread_list_elem,
+                              thread_list_elem_tmp) {
+                pthread_join(thread_list_elem->thread, NULL);
+                LL_DELETE(thread_list, thread_list_elem);
+                free(thread_list_elem);
+              }
+            }
+
+            /*
+             * Dispatch the thread an continue to next event
+             */
+            thread_list_elem = malloc(sizeof(*thread_list_elem));
+            thread_list_elem->user_event = evtentry->user_event;
+            thread_list_elem->user_event_apply_func =
+                evtentry->user_event_apply_func;
+            thread_list_elem->state = state;
+            pthread_create(&thread_list_elem->thread, NULL, thread_apply_event,
+                           thread_list_elem);
+            LL_APPEND(thread_list, thread_list_elem);
+
+            evtcount += 1;
+          }
+        }
+
+        /*
+         * Join any remaining threads
+         */
+        LL_FOREACH_SAFE(thread_list, thread_list_elem, thread_list_elem_tmp) {
+          pthread_join(thread_list_elem->thread, NULL);
+          LL_DELETE(thread_list, thread_list_elem);
+          free(thread_list_elem);
+        }
+      } else {
+        /*
+         * Single-thread, sequential execution of phases
+         */
+        struct EventListEntry* evtentry;
+        LL_FOREACH(mapentry->event_list, evtentry) {
+          if (evtentry->user_event != NULL &&
+              evtentry->user_event_apply_func != NULL) {
+            evtentry->user_event_apply_func(evtentry->user_event, state);
+            evtcount += 1;
+          }
+        }
+      }
     }
   }
 

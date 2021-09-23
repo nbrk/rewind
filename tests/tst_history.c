@@ -22,6 +22,8 @@
 #include <check.h>
 #include <stdlib.h>
 
+#include <pthread.h>
+
 #include <rewind/rewind.h>
 
 struct test_state {
@@ -53,6 +55,27 @@ void test_event_decr_apply(const struct test_event_decr* e,
 void test_event_mult_apply(const struct test_event_mult* e,
                            struct test_state* s) {
   s->value *= (float)e->by;
+}
+
+struct test_state_mt {
+  float value;
+  pthread_mutex_t mutex;
+};
+
+struct test_event_incr_mt {
+  int amount;
+};
+
+void test_event_incr_apply_mt(const struct test_event_incr_mt* e,
+                              struct test_state_mt* s) {
+  // some CPU, IO work, etc
+  int i;
+  for (i = 0; i < 1000; ++i)
+    ;
+
+  pthread_mutex_lock(&s->mutex);
+  s->value += (float)e->amount;
+  pthread_mutex_unlock(&s->mutex);
 }
 
 struct test_event_alive {
@@ -168,7 +191,7 @@ START_TEST(no_state_delta_after_no_events) {
   RwnHistory* h = rwn_history_create();
 
   // ne events scheduled
-  int evtcnt = rwn_history_state_delta(h, 0, 100, state);
+  int evtcnt = rwn_history_state_delta(h, 0, 100, state, 0);
   ck_assert_int_eq(evtcnt, 0);
   ck_assert_int_eq(state->value, 123);
 
@@ -205,7 +228,7 @@ START_TEST(state_delta_after_events) {
   rwn_history_schedule(h, 3, 0, e_decr,
                        (RwnEventApplyFunc)test_event_decr_apply, free);
 
-  int evtcnt = rwn_history_state_delta(h, 0, 10, state);
+  int evtcnt = rwn_history_state_delta(h, 0, 10, state, 0);
   ck_assert_int_eq(evtcnt, 3);
   ck_assert_int_eq(state->value, 100);
 
@@ -299,14 +322,43 @@ START_TEST(scheduled_events_applied_by_phases) {
    * Incorrect order gives result: 8
    */
   state->value = 0;
-  rwn_history_state_delta(h, 0, 0, state);
+  rwn_history_state_delta(h, 0, 0, state, 0);
   ck_assert_int_eq(state->value, 3);
 
   state->value = 1;
-  rwn_history_state_delta(h, 0, 0, state);
+  rwn_history_state_delta(h, 0, 0, state, 0);
   ck_assert_int_eq(state->value, 5);
 
   rwn_history_destroy(h);
+}
+END_TEST
+
+START_TEST(state_delta_after_events_with_multithreaded_phases) {
+  struct test_state_mt* state = malloc(sizeof(*state));
+  state->value = 0;
+
+  // will sync state writes on the following mutex (kept in the state)
+  pthread_mutex_init(&state->mutex, NULL);
+
+  struct test_event_incr_mt* ev[100];
+  int i;
+
+  RwnHistory* h = rwn_history_create();
+
+  for (i = 0; i < 100; ++i) {
+    ev[i] = malloc(sizeof(**ev));
+    ev[i]->amount = 1;
+    rwn_history_schedule(h, 0, 0, ev[i],
+                         (RwnEventApplyFunc)test_event_incr_apply_mt, free);
+  }
+
+  rwn_history_state_delta(h, 0, 1, state, 10);
+
+  ck_assert_int_eq(state->value, 100);
+
+  rwn_history_destroy(h);
+
+  free(state);
 }
 END_TEST
 
@@ -333,6 +385,7 @@ Suite* make_suite(void) {
   tcase_add_test(tc_core, scheduled_event_count_and_ptrs_returned);
   tcase_add_test(tc_core, unschedule_all_destroys_events);
   tcase_add_test(tc_core, scheduled_events_applied_by_phases);
+  tcase_add_test(tc_core, state_delta_after_events_with_multithreaded_phases);
   suite_add_tcase(s, tc_core);
 
   return s;
