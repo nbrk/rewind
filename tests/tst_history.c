@@ -32,11 +32,19 @@ struct test_event_incr {
   int amount;
 };
 
+struct test_event_decr {
+  int amount;
+};
+
 void test_event_incr_apply(const struct test_event_incr* e,
                            struct test_state* s) {
   s->value += (float)e->amount;
 }
 
+void test_event_decr_apply(const struct test_event_incr* e,
+                           struct test_state* s) {
+  s->value -= (float)e->amount;
+}
 struct test_event_alive {
   bool alive;
 };
@@ -72,10 +80,10 @@ START_TEST(destroy_destroys_events_with_callback) {
   e1 = malloc(sizeof(struct test_event_alive));
   e1->alive = true;
 
-  RwnEventHandle* eh0 = rwn_history_schedule(
-      h, 0, e0, NULL, (RwnEventDestroyFunc)test_event_alive_destroy);
-  RwnEventHandle* eh1 = rwn_history_schedule(
-      h, 1, e1, NULL, (RwnEventDestroyFunc)test_event_alive_destroy);
+  rwn_history_schedule(h, 0, e0, NULL,
+                       (RwnEventDestroyFunc)test_event_alive_destroy);
+  rwn_history_schedule(h, 1, e1, NULL,
+                       (RwnEventDestroyFunc)test_event_alive_destroy);
 
   rwn_history_destroy(h);
 
@@ -84,62 +92,6 @@ START_TEST(destroy_destroys_events_with_callback) {
 
   free(e0);
   free(e1);
-}
-END_TEST
-
-START_TEST(start_with_invalid_timepoint) {
-  RwnHistory* h = rwn_history_create();
-
-  int tp = rwn_history_current_timepoint(h);
-
-  ck_assert(rwn_history_is_timepoint_valid(tp) == false);
-
-  rwn_history_destroy(h);
-}
-END_TEST
-
-START_TEST(forwards_increments_timepoint) {
-  RwnHistory* h = rwn_history_create();
-
-  int tp = rwn_history_current_timepoint(h);
-
-  rwn_history_forwards(h, NULL);
-
-  ck_assert_int_eq(rwn_history_current_timepoint(h), tp + 1);
-  rwn_history_destroy(h);
-}
-END_TEST
-
-START_TEST(backwards_decrements_timepoint) {
-  RwnHistory* h = rwn_history_create();
-
-  int tp = rwn_history_current_timepoint(h);
-
-  rwn_history_backwards(h);
-
-  ck_assert_int_eq(rwn_history_current_timepoint(h), tp - 1);
-  rwn_history_destroy(h);
-}
-END_TEST
-
-START_TEST(state_unchanged_after_no_events) {
-  const size_t state_size = sizeof(int);
-
-  int* initial_s = malloc(state_size);
-  int* result_s = malloc(state_size);
-
-  *initial_s = 0xdeadbeef;
-  *result_s = *initial_s;
-
-  RwnHistory* h = rwn_history_create();
-  rwn_history_forwards(h, result_s);
-
-  ck_assert_int_eq(*result_s, *initial_s);
-
-  free(initial_s);
-  free(result_s);
-
-  rwn_history_destroy(h);
 }
 END_TEST
 
@@ -154,15 +106,15 @@ START_TEST(events_added_and_removed_from_scheduler) {
   RwnEventHandle* h1 = rwn_history_schedule(h, 1, e1, NULL, NULL);
   RwnEventHandle* h11 = rwn_history_schedule(h, 1, e11, NULL, NULL);
 
-  ck_assert_int_eq(rwn_history_count_events_at(h, 0), 1);
-  ck_assert_int_eq(rwn_history_count_events_at(h, 1), 2);
+  ck_assert_int_eq(rwn_history_count_events(h, 0), 1);
+  ck_assert_int_eq(rwn_history_count_events(h, 1), 2);
 
   rwn_history_unschedule(h, h0);
   rwn_history_unschedule(h, h1);
   rwn_history_unschedule(h, h11);
 
-  ck_assert_int_eq(rwn_history_count_events_at(h, 0), 0);
-  ck_assert_int_eq(rwn_history_count_events_at(h, 1), 0);
+  ck_assert_int_eq(rwn_history_count_events(h, 0), 0);
+  ck_assert_int_eq(rwn_history_count_events(h, 1), 0);
 
   rwn_history_destroy(h);
 
@@ -199,58 +151,81 @@ START_TEST(unschedule_destroys_events_with_callback) {
 }
 END_TEST
 
-START_TEST(destruction_destroys_events_with_callback) {
-  RwnHistory* h = rwn_history_create();
-
-  struct test_event_alive *e0, *e1;
-  e0 = malloc(sizeof(struct test_event_alive));
-  e0->alive = true;
-  e1 = malloc(sizeof(struct test_event_alive));
-  e1->alive = true;
-
-  RwnEventHandle* eh0 = rwn_history_schedule(
-      h, 0, e0, NULL, (RwnEventDestroyFunc)test_event_alive_destroy);
-  RwnEventHandle* eh1 = rwn_history_schedule(
-      h, 1, e1, NULL, (RwnEventDestroyFunc)test_event_alive_destroy);
-
-  rwn_history_unschedule(h, eh0);
-  rwn_history_unschedule(h, eh1);
-
-  ck_assert(e0->alive == false);
-  ck_assert(e1->alive == false);
-
-  rwn_history_destroy(h);
-
-  free(e0);
-  free(e1);
-}
-END_TEST
-
-START_TEST(forwards_applies_events) {
-  struct test_event_incr* e0 = malloc(sizeof *e0);
-  e0->amount = 1;
-
-  struct test_event_incr* e00 = malloc(sizeof *e00);
-  e00->amount = 2;
-
-  struct test_state* s = malloc(sizeof(*s));
-  s->value = 100;
+START_TEST(no_state_delta_after_no_events) {
+  struct test_state* state = malloc(sizeof(*state));
+  state->value = 123;
 
   RwnHistory* h = rwn_history_create();
 
-  rwn_history_schedule(h, 0, e0, (RwnEventApplyFunc)test_event_incr_apply,
-                       (RwnEventDestroyFunc)free);
-  rwn_history_schedule(h, 0, e00, (RwnEventApplyFunc)test_event_incr_apply,
-                       (RwnEventDestroyFunc)free);
+  // ne events scheduled
+  int evtcnt = rwn_history_state_delta(h, 0, 100, state);
+  ck_assert_int_eq(evtcnt, 0);
+  ck_assert_int_eq(state->value, 123);
 
-  rwn_history_forwards(h, s);
+  rwn_history_destroy(h);
 
-  ck_assert_int_eq(s->value, 100 + 1 + 2);
+  free(state);
+}
+END_TEST
+
+START_TEST(state_delta_after_events) {
+  struct test_state* state = malloc(sizeof(*state));
+  state->value = 123;
+
+  RwnHistory* h = rwn_history_create();
+
+  struct test_event_incr* e_incr;
+  struct test_event_decr* e_decr;
+
+  /*
+   * Schedule different events at different tps
+   */
+  e_incr = malloc(sizeof(*e_incr));
+  e_incr->amount = 70;
+  rwn_history_schedule(h, 0, e_incr, (RwnEventApplyFunc)test_event_incr_apply,
+                       free);
+
+  e_incr = malloc(sizeof(*e_incr));
+  e_incr->amount = 7;
+  rwn_history_schedule(h, 2, e_incr, (RwnEventApplyFunc)test_event_incr_apply,
+                       free);
+
+  e_decr = malloc(sizeof(*e_decr));
+  e_decr->amount = 100;
+  rwn_history_schedule(h, 3, e_decr, (RwnEventApplyFunc)test_event_decr_apply,
+                       free);
+
+  int evtcnt = rwn_history_state_delta(h, 0, 10, state);
+  ck_assert_int_eq(evtcnt, 3);
+  ck_assert_int_eq(state->value, 100);
+
+  rwn_history_destroy(h);
+
+  free(state);
+}
+END_TEST
+
+START_TEST(scheduled_event_count_and_ptrs_returned) {
+  RwnHistory* h = rwn_history_create();
+
+  struct test_event_incr* ev[10];
+  int i;
+  for (i = 0; i < 10; ++i) {
+    ev[i] = malloc(sizeof **ev);
+    rwn_history_schedule(h, 100, ev[i], NULL, free);
+  }
+
+  struct test_event_incr* retev[10];
+  ck_assert_int_eq(rwn_history_count_events(h, 100), 10);
+  int evtcnt = rwn_history_get_events(h, 100, (void**)retev);
+  ck_assert_int_eq(evtcnt, 10);
+  for (i = 0; i < 10; ++i) {
+    ck_assert_ptr_eq(retev[i], ev[i]);
+  }
 
   rwn_history_destroy(h);
 }
 END_TEST
-
 Suite* make_suite(void) {
   Suite* s;
   TCase* tc_core;
@@ -263,17 +238,12 @@ Suite* make_suite(void) {
   tcase_add_test(tc_core, destroy_destroys_events_with_callback);
   suite_add_tcase(s, tc_core);
 
-  tc_core = tcase_create("Timepoints");
-  tcase_add_test(tc_core, start_with_invalid_timepoint);
-  tcase_add_test(tc_core, forwards_increments_timepoint);
-  tcase_add_test(tc_core, backwards_decrements_timepoint);
-  suite_add_tcase(s, tc_core);
-
   tc_core = tcase_create("Scheduling");
-  tcase_add_test(tc_core, state_unchanged_after_no_events);
+  tcase_add_test(tc_core, no_state_delta_after_no_events);
   tcase_add_test(tc_core, events_added_and_removed_from_scheduler);
   tcase_add_test(tc_core, unschedule_destroys_events_with_callback);
-  tcase_add_test(tc_core, forwards_applies_events);
+  tcase_add_test(tc_core, state_delta_after_events);
+  tcase_add_test(tc_core, scheduled_event_count_and_ptrs_returned);
   suite_add_tcase(s, tc_core);
 
   return s;
@@ -287,8 +257,8 @@ int main(void) {
   s = make_suite();
   sr = srunner_create(s);
 
+  //  srunner_set_fork_status(sr, CK_NOFORK);
   srunner_run_all(sr, CK_VERBOSE);
-  //  srunner_run_all(sr, CK_NOFORK);
   number_failed = srunner_ntests_failed(sr);
   srunner_free(sr);
   return (number_failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;

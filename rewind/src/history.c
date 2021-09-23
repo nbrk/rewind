@@ -47,7 +47,6 @@ struct RwnEventHandle {
 };
 
 struct RwnHistory {
-  int timepoint;
   struct TimepointHashMapEntry* timepoint_hash_map;
   RwnEventHandle* event_handle_list;
 };
@@ -57,40 +56,10 @@ RwnHistory* rwn_history_create(void) {
 
   h = malloc(sizeof(*h));
 
-  h->timepoint = -1;
   h->timepoint_hash_map = NULL;
   h->event_handle_list = NULL;
 
   return h;
-}
-
-int rwn_history_current_timepoint(const RwnHistory* h) {
-  return h->timepoint;
-}
-
-void rwn_history_forwards(RwnHistory* h, void* state) {
-  h->timepoint += 1;
-
-  struct TimepointHashMapEntry* mapentry;
-  HASH_FIND_INT(h->timepoint_hash_map, &h->timepoint, mapentry);
-  if (mapentry == NULL) {
-    // no events are planned at this timepoint
-    return;
-  }
-
-  // apply all meaningful events, scheduled at this tp, to the provided state
-  struct EventListEntry* evtentry;
-  LL_FOREACH(mapentry->event_list, evtentry) {
-    // apply the event if the apply func, user event and the state neq null
-    if (state != NULL && evtentry->user_event != NULL &&
-        evtentry->user_event_apply_func != NULL) {
-      evtentry->user_event_apply_func(evtentry->user_event, state);
-    }
-  }
-}
-
-void rwn_history_backwards(RwnHistory* h) {
-  h->timepoint -= 1;
 }
 
 void rwn_history_destroy(RwnHistory* h) {
@@ -121,28 +90,20 @@ void rwn_history_destroy(RwnHistory* h) {
   free(h);
 }
 
-void rwn_history_reconstruct_state(const RwnHistory* h,
-                                   const void* initial_state,
-                                   void* result_state) {
-  // TODO
-  return;
-}
-
 RwnEventHandle* rwn_history_schedule(RwnHistory* h,
-                                     int timepoint,
+                                     int at_timepoint,
                                      const void* evt,
                                      RwnEventApplyFunc evt_apply_func,
                                      RwnEventDestroyFunc evt_destroy_func) {
-  if (!rwn_history_is_timepoint_valid(timepoint)) {
+  if (at_timepoint < 0)
     return NULL;
-  }
 
   struct TimepointHashMapEntry* mapentry;
-  HASH_FIND_INT(h->timepoint_hash_map, &timepoint, mapentry);
+  HASH_FIND_INT(h->timepoint_hash_map, &at_timepoint, mapentry);
   if (mapentry == NULL) {
     // new map entry
     mapentry = malloc(sizeof(*mapentry));
-    mapentry->timepoint = timepoint;
+    mapentry->timepoint = at_timepoint;
     mapentry->event_list = NULL;
     HASH_ADD_INT(h->timepoint_hash_map, timepoint, mapentry);
   }
@@ -157,7 +118,7 @@ RwnEventHandle* rwn_history_schedule(RwnHistory* h,
 
   // create, save and return opaque handle describing how to locate the event
   RwnEventHandle* handle = malloc(sizeof(*handle));
-  handle->timepoint = timepoint;
+  handle->timepoint = at_timepoint;
   handle->event_list_elem = evtentry;
   handle->next = NULL;
   LL_APPEND(h->event_handle_list, handle);
@@ -165,13 +126,12 @@ RwnEventHandle* rwn_history_schedule(RwnHistory* h,
   return handle;
 }
 
-int rwn_history_count_events_at(const RwnHistory* h, int timepoint) {
-  if (!rwn_history_is_timepoint_valid(timepoint)) {
+int rwn_history_count_events(const RwnHistory* h, int at_timepoint) {
+  if (at_timepoint < 0)
     return 0;
-  }
 
   struct TimepointHashMapEntry* mapentry;
-  HASH_FIND_INT(h->timepoint_hash_map, &timepoint, mapentry);
+  HASH_FIND_INT(h->timepoint_hash_map, &at_timepoint, mapentry);
   if (mapentry != NULL) {
     struct EventListEntry* evtentry;
     int count;
@@ -179,10 +139,6 @@ int rwn_history_count_events_at(const RwnHistory* h, int timepoint) {
     return count;
   }
   return 0;
-}
-
-bool rwn_history_is_timepoint_valid(int timepoint) {
-  return (timepoint >= 0);
 }
 
 static bool is_event_handle_valid(const RwnHistory* h,
@@ -235,4 +191,78 @@ void rwn_history_unschedule(RwnHistory* h, RwnEventHandle* eh) {
   // free/invalidate the handle
   LL_DELETE(h->event_handle_list, eh);
   free(eh);
+}
+
+int rwn_history_state_delta(const RwnHistory* h,
+                            int from_timepoint,
+                            int to_timepoint,
+                            void* state) {
+  if (from_timepoint < 0 || to_timepoint < 0)
+    return 0;
+
+  if (to_timepoint < from_timepoint)
+    return 0;
+
+  int evtcount = 0;
+  int i;
+  for (i = from_timepoint; i < to_timepoint; ++i) {
+    struct TimepointHashMapEntry* mapentry;
+    HASH_FIND_INT(h->timepoint_hash_map, &i, mapentry);
+    if (mapentry != NULL) {
+      struct EventListEntry* evtentry;
+      LL_FOREACH(mapentry->event_list, evtentry) {
+        if (state != NULL && evtentry->user_event != NULL &&
+            evtentry->user_event_apply_func != NULL) {
+          evtentry->user_event_apply_func(evtentry->user_event, state);
+          evtcount += 1;
+        }
+      }
+    }
+  }
+
+  return evtcount;
+}
+
+int rwn_history_unschedule_all(RwnHistory* h,
+                               int from_timepoint,
+                               int to_timepoint) {
+  if (from_timepoint < 0 || to_timepoint < 0)
+    return 0;
+
+  if (to_timepoint < from_timepoint)
+    return 0;
+
+  int evtcount = 0;
+
+  // Iterate over issued event handles to find and unsched such events
+  RwnEventHandle *eh, *eh_tmp;
+  LL_FOREACH_SAFE(h->event_handle_list, eh, eh_tmp) {
+    if (eh->timepoint >= from_timepoint && eh->timepoint < to_timepoint) {
+      rwn_history_unschedule(h, eh);
+      evtcount += 1;
+    }
+  }
+
+  return evtcount;
+}
+
+int rwn_history_get_events(const RwnHistory* h,
+                           int at_timepoint,
+                           void** user_eventv) {
+  if (rwn_history_count_events(h, at_timepoint) <= 0)
+    return 0;
+
+  int evtcount = 0;
+
+  struct TimepointHashMapEntry* mapentry;
+  HASH_FIND_INT(h->timepoint_hash_map, &at_timepoint, mapentry);
+  if (mapentry != NULL) {
+    struct EventListEntry* evtentry;
+    LL_FOREACH(mapentry->event_list, evtentry) {
+      user_eventv[evtcount] = evtentry->user_event;
+      evtcount += 1;
+    }
+  }
+
+  return evtcount;
 }

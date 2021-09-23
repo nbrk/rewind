@@ -30,18 +30,21 @@ typedef void (*RwnEventDestroyFunc)(void* e);
 
 extern RwnHistory* rwn_history_create(void);
 extern void rwn_history_destroy(RwnHistory* h);
-extern int rwn_history_current_timepoint(const RwnHistory* h);
-extern bool rwn_history_is_timepoint_valid(int timepoint);
-extern void rwn_history_forwards(RwnHistory* h, void* state);
-extern void rwn_history_backwards(RwnHistory* h);
-extern int rwn_history_count_events_at(const RwnHistory* h, int timepoint);
+extern int rwn_history_count_events(const RwnHistory* h, int at_timepoint);
+extern int rwn_history_get_events(const RwnHistory* h,
+                                  int at_timepoint,
+                                  void** user_eventv);
+extern int rwn_history_state_delta(const RwnHistory* h,
+                                   int from_timepoint,
+                                   int to_timepoint,
+                                   void* delta_state);
 extern RwnEventHandle* rwn_history_schedule(
     RwnHistory* h,
-    int timepoint,
+    int at_timepoint,
     const void* evt,
     RwnEventApplyFunc evt_apply_func,
     RwnEventDestroyFunc evt_destroy_func);
 extern void rwn_history_unschedule(RwnHistory* h, RwnEventHandle* eh);
-extern void rwn_history_reconstruct_state(const RwnHistory* h,
-                                          const void* initial_state,
-                                          void* result_state);
+extern int rwn_history_unschedule_all(RwnHistory* h,
+                                      int from_timepoint,
+                                      int to_timepoint);
