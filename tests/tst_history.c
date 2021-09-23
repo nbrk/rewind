@@ -226,6 +226,35 @@ START_TEST(scheduled_event_count_and_ptrs_returned) {
   rwn_history_destroy(h);
 }
 END_TEST
+
+START_TEST(unschedule_all_destroys_events) {
+  RwnHistory* h = rwn_history_create();
+
+  struct test_event_alive* ev[10];
+  int i;
+  for (i = 0; i < 10; ++i) {
+    ev[i] = malloc(sizeof **ev);
+    ev[i]->alive = true;
+    rwn_history_schedule(
+        h, rand() % 10, ev[i], NULL,
+        (RwnEventDestroyFunc)test_event_alive_destroy);  // special destroy cb
+  }
+
+  int evtcnt = rwn_history_unschedule_all(h, 0, 10);
+  ck_assert_int_eq(evtcnt, 10);
+
+  for (i = 0; i < 10; ++i) {
+    ck_assert(!ev[i]->alive);
+    free(ev[i]);
+  }
+
+  rwn_history_destroy(h);
+}
+END_TEST
+
+/*
+ * TEST DRIVER CODE
+ */
 Suite* make_suite(void) {
   Suite* s;
   TCase* tc_core;
@@ -244,6 +273,7 @@ Suite* make_suite(void) {
   tcase_add_test(tc_core, unschedule_destroys_events_with_callback);
   tcase_add_test(tc_core, state_delta_after_events);
   tcase_add_test(tc_core, scheduled_event_count_and_ptrs_returned);
+  tcase_add_test(tc_core, unschedule_all_destroys_events);
   suite_add_tcase(s, tc_core);
 
   return s;
